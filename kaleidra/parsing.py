@@ -13,6 +13,21 @@ class Section:
     page: int | None = None
 
 
+def clean_text(text: str) -> str:
+    """Normalize messy PDF / HTML extract for readable answers."""
+    if not text:
+        return ""
+    t = text.replace("\r", "\n")
+    t = re.sub(r"(\w)-\n(\w)", r"\1\2", t)
+    t = re.sub(r"([a-z])([A-Z])", r"\1 \2", t)  # IsA / ModelUnderstanding -> spaced
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r" *\n+ *", "\n", t)
+    t = re.sub(r"(?<![.!?:])\n(?![A-Z#\d•\-])", " ", t)
+    t = re.sub(r"\n{2,}", "\n", t)
+    t = re.sub(r" {2,}", " ", t)
+    return t.strip()
+
+
 def _txt(path: Path) -> list[Section]:
     return [Section(path.read_text(errors="ignore"))]
 
@@ -86,9 +101,9 @@ def _pdf(path: Path) -> list[Section]:
     from pypdf import PdfReader
 
     return [
-        Section(p.extract_text() or "", page=i + 1)
+        Section(clean_text(p.extract_text() or ""), page=i + 1)
         for i, p in enumerate(PdfReader(str(path)).pages)
-        if (p.extract_text() or "").strip()
+        if clean_text(p.extract_text() or "")
     ]
 
 

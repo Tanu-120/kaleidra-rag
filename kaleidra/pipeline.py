@@ -1,6 +1,7 @@
 """Kaleidra pipeline orchestrator. Every stage emits a trace the UI renders as the 'retrieval X-ray'."""
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from .embeddings import load_embedder
 from .graph import KnowledgeGraph
 from .parsing import PARSERS, parse
 from .rerank import load_reranker, rerank
-from .store import HybridStore
+from .store import Hit, HybridStore
 
 
 def _hit_dict(h, order: int | None = None) -> dict:
@@ -113,7 +114,6 @@ class Kaleidra:
             ents, cids = self.graph.expand(q)
             have = {h.chunk.id for h in hits}
             by_id = {c.id: c for c in self.chunks}
-            from .store import Hit
             for cid in cids[:4]:
                 if cid not in have and cid in by_id:
                     h = Hit(by_id[cid])
@@ -137,6 +137,51 @@ class Kaleidra:
             hits, dropped = dd.dedupe(hits, settings.dedupe_threshold)
             stage("dedupe", t, dropped=len(dropped))
         hits = hits[:top_k]
+
+        # 6b. definitional questions: pull early-page / overview chunks the main ranker may miss
+        if re.match(r"^\s*what\s+(is|are)\b", q, re.I):
+            subj = re.sub(r"^\s*what\s+(is|are)\s+", "", q, flags=re.I).strip(" ?.")
+            if subj:
+                t = time.time()
+                have = {h.chunk.id for h in hits}
+                subj_l = subj.lower()
+                # 1) lexical/hybrid extras
+                extra = self.store.search(
+                    [subj, f"{subj} architecture", f"{subj} overview", f"what is {subj}", f"{subj} three-layer"],
+                    n=15, mode="hybrid",
+                )
+                # 2) direct corpus scan: early pages that mention the subject (reliable for PDFs)
+                scanned = []
+                for c in self.chunks:
+                    if (c.page or 99) > 4:
+                        continue
+                    blob = (c.text[:500] + " " + (c.heading or "") + " " + c.source).lower()
+                    if subj_l not in blob:
+                        continue
+                    scanned.append(Hit(c))
+                pool = extra + scanned
+                pool = sorted(
+                    pool,
+                    key=lambda h: (
+                        0 if re.search(
+                            r"architecture|overview|introduction|independent layers|cloud data|data platform|is a\b",
+                            h.chunk.text[:280],
+                            re.I,
+                        ) else 1,
+                        h.chunk.page or 99,
+                        0 if subj_l in h.chunk.text[:120].lower() else 1,
+                    ),
+                )
+                added = 0
+                for h in pool:
+                    if h.chunk.id in have:
+                        continue
+                    hits.append(h)
+                    have.add(h.chunk.id)
+                    added += 1
+                    if added >= 6:
+                        break
+                stage("definition_boost", t, added=added, subject=subj)
 
         # 7. indirect-injection sanitization of retrieved context
         t = time.time()
