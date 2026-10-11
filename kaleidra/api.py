@@ -40,6 +40,8 @@ class AskRequest(BaseModel):
     use_graph: bool = True
     use_dedupe: bool = True
     top_k: int = Field(5, ge=1, le=15)
+    # Empty / omitted = search all indexed documents; otherwise restrict to these filenames
+    sources: list[str] = Field(default_factory=list)
 
 
 class ConfigFlags(BaseModel):
@@ -70,6 +72,7 @@ class EvalRequest(BaseModel):
 
 
 def _run_ask(p: Kaleidra, question: str, cfg: ConfigFlags | AskRequest) -> dict:
+    sources = getattr(cfg, "sources", None) or None
     res = p.ask(
         question,
         mode=cfg.mode,
@@ -78,6 +81,7 @@ def _run_ask(p: Kaleidra, question: str, cfg: ConfigFlags | AskRequest) -> dict:
         use_graph=cfg.use_graph,
         use_dedupe=cfg.use_dedupe,
         top_k=cfg.top_k,
+        sources=list(sources) if sources else None,
     )
     focus = res.get("graph", {}).get("entities") or None
     res["graph_view"] = p.graph.to_json(focus)

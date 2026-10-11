@@ -28,6 +28,9 @@ class Settings:
     dedupe_threshold: float = float(_env("KALEIDRA_DEDUPE", "0.88"))
     ollama_url: str = _env("KALEIDRA_OLLAMA_URL", "")  # e.g. http://localhost:11434
     ollama_model: str = _env("KALEIDRA_OLLAMA_MODEL", "llama3.2")
+    # Scanned PDFs: OCR up to this many pages (0 = disable OCR)
+    ocr_max_pages: int = int(_env("KALEIDRA_OCR_MAX_PAGES", "80"))
+    ocr_dpi_scale: float = float(_env("KALEIDRA_OCR_SCALE", "1.6"))
 
 
 settings = Settings()

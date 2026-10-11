@@ -67,7 +67,10 @@ class Kaleidra:
             cs = chunk_sections(sections, f.name, settings.chunk_size, settings.chunk_overlap)
             chunks += cs
             pii_total += n_pii
-            self.doc_stats[f.name] = {"chunks": len(cs), "pii_redacted": n_pii}
+            info: dict = {"chunks": len(cs), "pii_redacted": n_pii}
+            if not cs:
+                info["warning"] = "no extractable text (scanned PDF needs OCR, or empty file)"
+            self.doc_stats[f.name] = info
         self.chunks = chunks
         self.store.index(chunks)
         self.graph.build(chunks)
@@ -80,13 +83,18 @@ class Kaleidra:
 
     # ------------------------------------------------------------ query
     def ask(self, question: str, *, mode: str = "hybrid", use_rerank: bool = True, use_hyde: bool = True,
-            use_graph: bool = True, use_dedupe: bool = True, top_k: int | None = None) -> dict:
+            use_graph: bool = True, use_dedupe: bool = True, top_k: int | None = None,
+            sources: list[str] | None = None) -> dict:
         top_k = top_k or settings.top_k_final
         trace: dict = {"stages": []}
         t0 = time.time()
+        source_filter = {s.strip() for s in (sources or []) if s and s.strip()} or None
 
         def stage(name, t, **info):
             trace["stages"].append({"name": name, "ms": round((time.time() - t) * 1000, 1), **info})
+
+        def in_scope(c: Chunk) -> bool:
+            return source_filter is None or c.source in source_filter
 
         # 1. input guardrails
         t = time.time()
@@ -97,6 +105,25 @@ class Kaleidra:
                     "message": "Blocked by input guardrails (" + gi["block_reason"] + ")."}
         q = gi["sanitized_query"]
 
+        if source_filter:
+            known = {c.source for c in self.chunks}
+            missing = sorted(source_filter - known)
+            stage("source_filter", time.time(), sources=sorted(source_filter), missing=missing)
+            if not (source_filter & known):
+                return {
+                    "blocked": False, "question": question, "sanitized_query": q, "guard": gi,
+                    "variants": [], "candidates": [], "hits": [], "dropped": [], "graph": {"entities": [], "added": []},
+                    "quarantined": [], "answer": {
+                        "mode": "abstain", "summary": "No indexed text found in the selected documents.",
+                        "claims": [{"text": "No indexed text found in the selected documents. Re-ingest or pick other files.",
+                                    "cite": None, "source": None, "heading": ""}],
+                        "sources_used": [], "faithfulness": {"score": 0.0, "claims": []},
+                        "confidence": {"label": "low", "score": 0.0, "reasons": ["empty selection"]},
+                    },
+                    "output_guard": {"pii": [], "leak_suspected": False}, "trace": trace,
+                    "sources_filter": sorted(source_filter),
+                }
+
         # 2. query transformation
         t = time.time()
         variants = qt.transform(q, use_hyde=use_hyde and mode != "bm25", use_expand=True)
@@ -104,8 +131,14 @@ class Kaleidra:
 
         # 3. hybrid retrieval
         t = time.time()
-        hits = self.store.search([v["text"] for v in variants], n=settings.top_k_candidates, rrf_k=settings.rrf_k, mode=mode)
-        stage("hybrid_retrieval", t, candidates=len(hits), mode=mode)
+        hits = self.store.search(
+            [v["text"] for v in variants],
+            n=settings.top_k_candidates,
+            rrf_k=settings.rrf_k,
+            mode=mode,
+            sources=source_filter,
+        )
+        stage("hybrid_retrieval", t, candidates=len(hits), mode=mode, sources=sorted(source_filter) if source_filter else "all")
 
         # 4. graph expansion
         graph_info = {"entities": [], "added": []}
@@ -113,7 +146,7 @@ class Kaleidra:
             t = time.time()
             ents, cids = self.graph.expand(q)
             have = {h.chunk.id for h in hits}
-            by_id = {c.id: c for c in self.chunks}
+            by_id = {c.id: c for c in self.chunks if in_scope(c)}
             for cid in cids[:4]:
                 if cid not in have and cid in by_id:
                     h = Hit(by_id[cid])
@@ -145,14 +178,16 @@ class Kaleidra:
             topic = ["materialized views", "regular views", "view in Snowflake", "CREATE VIEW"]
         elif re.search(r"\bvirtual warehouses?\b|\bwarehouses?\b", ql):
             topic = ["virtual warehouse", "warehouse compute", "auto-suspend"]
+        elif re.search(r"\brelational databases?\b|\bdatabases?\b", ql):
+            topic = ["relational database", "what is a relational database", "collection of data stored in tables"]
+        elif re.search(r"\bSQL\b", q, re.I) and re.search(r"\bwhat\b", ql):
+            topic = ["what is SQL", "Structured Query Language", "SQL is the most popular"]
         if topic:
             t = time.time()
             have = {h.chunk.id for h in hits}
             added = 0
-            for h in self.store.search(topic + [q], n=12, mode="hybrid"):
+            for h in self.store.search(topic + [q], n=12, mode="hybrid", sources=source_filter):
                 if h.chunk.id in have:
-                    continue
-                if not re.search(r"\bviews?\b|\bwarehouse", h.chunk.text, re.I):
                     continue
                 hits.append(h)
                 have.add(h.chunk.id)
@@ -161,38 +196,41 @@ class Kaleidra:
                     break
             stage("topic_boost", t, added=added)
 
-        # 6c. definitional questions: pull early-page / overview chunks the main ranker may miss
+        # 6c. definitional questions: pull overview / "what is X" chunks the main ranker may miss
         if re.match(r"^\s*what\s+(is|are)\b", q, re.I):
-            subj = re.sub(r"^\s*what\s+(is|are)\s+", "", q, flags=re.I).strip(" ?.")
+            subj = re.sub(r"^\s*what\s+(is|are)\s+", "", q, flags=re.I)
+            subj = re.sub(r"^(a|an|the)\s+", "", subj, flags=re.I).strip(" ?.")
             if subj:
                 t = time.time()
                 have = {h.chunk.id for h in hits}
                 subj_l = subj.lower()
                 # 1) lexical/hybrid extras
                 extra = self.store.search(
-                    [subj, f"{subj} architecture", f"{subj} overview", f"what is {subj}", f"{subj} three-layer"],
-                    n=15, mode="hybrid",
+                    [subj, f"what is {subj}", f"what is a {subj}", f"{subj} overview", f"{subj} is"],
+                    n=20, mode="hybrid", sources=source_filter,
                 )
-                # 2) direct corpus scan: early pages that mention the subject (reliable for PDFs)
+                # 2) direct corpus scan for definitional passages (any page)
                 scanned = []
                 for c in self.chunks:
-                    if (c.page or 99) > 4:
+                    if not in_scope(c):
                         continue
-                    blob = (c.text[:500] + " " + (c.heading or "") + " " + c.source).lower()
-                    if subj_l not in blob:
+                    blob = (c.heading or "") + "\n" + c.text[:900]
+                    bl = blob.lower()
+                    if subj_l not in bl and not all(tok in bl for tok in subj_l.split() if len(tok) > 2):
                         continue
                     scanned.append(Hit(c))
                 pool = extra + scanned
                 pool = sorted(
                     pool,
                     key=lambda h: (
+                        0 if re.search(rf"what is (a |an )?{re.escape(subj_l)}", (h.chunk.heading or "") + " " + h.chunk.text[:200], re.I) else 1,
+                        0 if re.search(rf"\b{re.escape(subj_l)}\b.{{0,40}}\bis\b", h.chunk.text[:400], re.I) else 1,
                         0 if re.search(
-                            r"architecture|overview|introduction|independent layers|cloud data|data platform|is a\b",
-                            h.chunk.text[:280],
+                            r"\bis a\b|\bare\b|overview|introduction|defined as|consists of|collection of",
+                            h.chunk.text[:320],
                             re.I,
-                        ) else 1,
+                        ) else 2,
                         h.chunk.page or 99,
-                        0 if subj_l in h.chunk.text[:120].lower() else 1,
                     ),
                 )
                 added = 0
@@ -202,7 +240,7 @@ class Kaleidra:
                     hits.append(h)
                     have.add(h.chunk.id)
                     added += 1
-                    if added >= 6:
+                    if added >= 8:
                         break
                 stage("definition_boost", t, added=added, subject=subj)
 
@@ -237,4 +275,5 @@ class Kaleidra:
             "dropped": dropped, "graph": graph_info, "quarantined": quarantined,
             "answer": ans, "output_guard": {"pii": go["pii"], "leak_suspected": go["leak_suspected"]},
             "trace": trace,
+            "sources_filter": sorted(source_filter) if source_filter else None,
         }

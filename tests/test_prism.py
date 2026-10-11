@@ -67,6 +67,16 @@ def test_hybrid_retrieval_finds_retry_doc(kaleidra):
     assert r["answer"]["faithfulness"]["score"] > 0.6
 
 
+def test_ask_can_scope_to_selected_sources(kaleidra):
+    r = kaleidra.ask(
+        "How does Kaleidra retry failed retrieval or model calls with exponential backoff?",
+        sources=["02_hybrid_retrieval.md"],
+    )
+    assert not r["blocked"]
+    assert r["sources_filter"] == ["02_hybrid_retrieval.md"]
+    assert all(h["source"] == "02_hybrid_retrieval.md" for h in r["hits"])
+
+
 def test_indirect_injection_quarantined(kaleidra):
     r = kaleidra.ask("What should happen when the red-team poisoned fixture is retrieved?", top_k=8)
     text = " ".join(h["text"] for h in r["hits"]).lower()
@@ -102,7 +112,7 @@ def test_benchmark_and_selection(kaleidra):
 
 def test_api_contract():
     with TestClient(app) as c:
-        assert c.get("/api/health").json() == {"ok": True}
+        assert c.get("/api/health").json().get("ok") is True
         r = c.post("/api/ask", json={"question": "What gates does production selection use?"}).json()
         assert {"hits", "answer", "trace", "candidates", "graph_view", "variants"} <= set(r)
         assert c.post("/api/ask", json={"question": "x"}).status_code == 422

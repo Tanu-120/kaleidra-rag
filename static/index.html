@@ -160,6 +160,20 @@ button,input,select,textarea{font:inherit}
   display:inline-flex;align-items:center;gap:6px;max-width:100%;
 }
 .pending .tag button{border:0;background:none;cursor:pointer;color:var(--bad);font-size:14px;line-height:1}
+.doc-scope{
+  border:1px solid var(--line);border-radius:10px;background:#fff;padding:8px 10px;margin-bottom:8px;
+}
+.doc-scope summary{
+  cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mute);font-weight:500;
+}
+.doc-scope summary::-webkit-details-marker{display:none}
+.doc-scope summary b{color:var(--ink);font-weight:600}
+.doc-scope .scope-body{margin-top:8px;display:grid;gap:4px;max-height:150px;overflow:auto}
+.doc-scope label{
+  display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink2);cursor:pointer;padding:3px 2px;
+}
+.doc-scope label input{accent-color:var(--teal)}
+.doc-scope .scope-hint{font-size:11px;color:var(--soft);margin-top:4px}
 .welcome{
   margin:auto;text-align:center;max-width:420px;padding:30px 16px;color:var(--mute);
 }
@@ -423,7 +437,7 @@ body.side-open .scrim{display:block}
         <path d="M36 24 L58 12 M38 32 L58 32 M36 40 L58 52" stroke="url(#lg)" stroke-width="2.8" stroke-linecap="round"/>
       </svg>
       <div><h1>Kaleidra</h1><small>RAG Console</small></div>
-    </div>
+  </div>
     <nav class="nav">
       <div class="sec">Workspace</div>
       <button class="on" data-view="overview"><span class="ico">◈</span> Overview</button>
@@ -457,7 +471,7 @@ body.side-open .scrim{display:block}
         <span class="chip">rerank <b id="cRerank">—</b></span>
         <button class="btn ghost" id="btnDemo">Demo mode</button>
         <button class="btn ghost" id="btnNewChat">New chat</button>
-      </div>
+  </div>
     </header>
 
     <div class="content">
@@ -552,8 +566,8 @@ body.side-open .scrim{display:block}
             <div class="chat-box">
               <div class="chat-scroll" id="chatScroll">
                 <div class="welcome" id="welcome">
-                  <h4>Upload a document, then ask</h4>
-                  <p>Attach a file here (or in Documents), then ask. Answers show which files were used and cite the passages.</p>
+                  <h4>Ask across your documents</h4>
+                  <p>By default answers search the full corpus. Pick specific documents below — or upload a file — to limit answers to those sources only.</p>
                   <div class="quick" id="quick"></div>
                 </div>
               </div>
@@ -570,11 +584,19 @@ body.side-open .scrim{display:block}
                     <option value="dense">dense</option>
                   </select>
                 </div>
+                <details class="doc-scope" id="docScope">
+                  <summary>Search in: <b id="scopeLabel">All documents</b></summary>
+                  <div class="scope-body">
+                    <label><input type="checkbox" id="scopeAll" checked> All documents</label>
+                    <div id="docChecks"></div>
+                  </div>
+                  <div class="scope-hint">Upload below to add files; they are auto-selected for the next question.</div>
+                </details>
                 <div class="pending" id="pending"></div>
                 <div class="comp-row">
                   <button class="icon-btn" id="chatUploadBtn" title="Upload document" type="button">↑</button>
                   <input id="chatFile" type="file" multiple hidden accept=".md,.txt,.html,.htm,.docx,.pdf,.csv">
-                  <input id="q" placeholder="Ask about your uploaded documents…" autocomplete="off">
+                  <input id="q" placeholder="Ask about your documents…" autocomplete="off">
                   <button class="btn primary" id="go" style="min-width:96px">Ask</button>
                 </div>
                 <div class="shield-mini">
@@ -658,15 +680,15 @@ body.side-open .scrim{display:block}
           <div class="toolbar">
             <input class="search-in" id="docFilter" placeholder="Filter by filename…">
             <span class="chip">showing <b id="docCount">0</b></span>
-          </div>
+    </div>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Document</th><th>Type</th><th>Chunks</th><th>PII redacted</th><th>Status</th></tr></thead>
               <tbody id="docTable"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
             </table>
-          </div>
-        </div>
-      </section>
+    </div>
+  </div>
+</section>
 
       <!-- EVAL -->
       <section class="view" id="v-eval">
@@ -678,9 +700,9 @@ body.side-open .scrim{display:block}
             <a class="btn ghost" id="exportEval" href="/api/eval/export" style="text-decoration:none">Export JSON report</a>
             <span id="evalState" class="mono" style="font-size:12px;color:var(--mute)"></span>
           </div>
-        </div>
+  </div>
         <div id="evalOut"><div class="empty">Run a benchmark to see the leaderboard and production pick.</div></div>
-      </section>
+</section>
 
       <!-- PIPELINE / HOW -->
       <section class="view" id="v-pipeline">
@@ -697,7 +719,7 @@ body.side-open .scrim{display:block}
           <div class="step"><div class="n">03</div><h4>Hybrid retrieve</h4><p>BM25 ‖ dense → RRF → graph hop → cross-encoder → dedupe.</p></div>
           <div class="step"><div class="n">04</div><h4>Answer safely</h4><p>Quarantine poisoned chunks, emit grounded claims, scan output.</p></div>
         </div>
-        <div class="grid g2">
+  <div class="grid g2">
           <div class="card">
             <h3>Stage map</h3>
             <div class="codeish">question
@@ -794,8 +816,52 @@ const opts={use_hyde:true,use_rerank:true,use_graph:true,use_dedupe:true};
 const HIST_KEY='kaleidra_history_v1';
 let LAST=null, STATUS=null;
 let pendingFiles=[];
+let selectedSources=new Set(); // empty + scopeAll = all docs
 
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove('show'),2200)}
+
+function scopeAllOn(){return $('#scopeAll')?.checked!==false}
+function selectedDocList(){
+  if(scopeAllOn()) return [];
+  return [...selectedSources];
+}
+function updateScopeLabel(){
+  const el=$('#scopeLabel'); if(!el) return;
+  if(scopeAllOn()){ el.textContent='All documents'; return; }
+  const n=selectedSources.size;
+  el.textContent=n? (n===1?[...selectedSources][0]:`${n} selected`) : 'None selected';
+}
+function renderDocScope(){
+  const box=$('#docChecks'); if(!box) return;
+  const docs=Object.keys(STATUS?.docs||{}).sort((a,b)=>a.localeCompare(b));
+  box.innerHTML=docs.map(n=>{
+    const st=STATUS.docs[n]||{};
+    const warn=st.warning||st.error||(st.chunks===0?'no text yet':'');
+    const checked=!scopeAllOn() && selectedSources.has(n);
+    return `<label><input type="checkbox" data-doc="${esc(n)}" ${checked?'checked':''} ${scopeAllOn()?'disabled':''}>
+      <span>${esc(n)}${warn?` <span class="mono" style="color:var(--bad);font-size:10px">(${esc(String(warn).slice(0,42))})</span>`:''}</span></label>`;
+  }).join('')||'<div class="empty">No documents indexed yet.</div>';
+  $$('#docChecks input').forEach(inp=>{
+    inp.onchange=()=>{
+      if(inp.checked) selectedSources.add(inp.dataset.doc);
+      else selectedSources.delete(inp.dataset.doc);
+      updateScopeLabel();
+    };
+  });
+  updateScopeLabel();
+}
+$('#scopeAll')?.addEventListener('change',()=>{
+  if($('#scopeAll').checked) selectedSources.clear();
+  renderDocScope();
+});
+function focusSources(names){
+  const list=(names||[]).filter(Boolean);
+  if(!list.length) return;
+  $('#scopeAll').checked=false;
+  selectedSources=new Set(list);
+  renderDocScope();
+  updateScopeLabel();
+}
 function loadHist(){try{return JSON.parse(localStorage.getItem(HIST_KEY)||'[]')}catch{return[]}}
 function saveHist(list){localStorage.setItem(HIST_KEY,JSON.stringify(list.slice(0,80)));renderHist()}
 function pushHist(entry){const list=loadHist();list.unshift(entry);saveHist(list)}
@@ -896,7 +962,7 @@ function live(){
     if(!v.trim()){$('#riskbar').style.width='0';$('#riskTxt').textContent='risk 0.00';$('#piiTxt').textContent='';$('#preview').innerHTML='';return}
     try{
       const g=await api('/api/guard',{text:v});
-      $('#riskbar').style.width=Math.round(g.injection.risk*100)+'%';
+    $('#riskbar').style.width=Math.round(g.injection.risk*100)+'%';
       $('#riskTxt').textContent='risk '+g.injection.risk.toFixed(2)+(g.injection.reasons[0]?' · '+g.injection.reasons[0]:'');
       $('#piiTxt').textContent=g.pii.length?g.pii.length+' PII': '';
       $('#preview').innerHTML=g.pii.length?`<span style="color:var(--bad)">redacts → </span>${esc(g.sanitized_query)}`:'';
@@ -909,8 +975,8 @@ $('#go').onclick=ask;
 
 function clearChat(){
   $('#chatScroll').innerHTML=`<div class="welcome" id="welcome">
-    <h4>Upload a document, then ask</h4>
-    <p>Attach a file here (or in Documents), then ask. Answers show which files were used and cite the passages.</p>
+    <h4>Ask across your documents</h4>
+    <p>By default answers search the full corpus. Pick specific documents below — or upload a file — to limit answers to those sources only.</p>
     <div class="quick" id="quick">${PRESETS.map(([t,a])=>`<button class="${a?'atk':''}" data-q="${esc(t)}">${esc(t.length>42?t.slice(0,40)+'…':t)}</button>`).join('')}</div>
   </div>`;
   $('#quick').onclick=e=>{const b=e.target.closest('button');if(b){$('#q').value=b.dataset.q;live();ask()}};
@@ -949,7 +1015,9 @@ $('#chatFile').onchange=e=>{
   [...e.target.files].forEach(f=>pendingFiles.push(f));
   e.target.value='';
   renderPending();
-  toast(pendingFiles.length+' file(s) ready — ask to index & answer');
+  // Prefer answering from the files about to be uploaded
+  focusSources(pendingFiles.map(f=>f.name));
+  toast(pendingFiles.length+' file(s) ready — will search these after indexing');
 };
 
 function confBadge(c){
@@ -1026,6 +1094,10 @@ function cycleThink(el){
 }
 async function ask(){
   const q=$('#q').value.trim(); if(q.length<2) return;
+  if(!scopeAllOn() && !selectedSources.size && !pendingFiles.length){
+    toast('Select at least one document, or choose All documents');
+    return;
+  }
   $('#go').disabled=true;
   document.body.classList.add('thinking');
   $('#refractBar')?.classList.add('on');
@@ -1037,14 +1109,17 @@ async function ask(){
       pending.querySelector('.bubble').innerHTML=thinkingHTML('indexing docs');
       pending.querySelector('.meta').textContent=`indexing ${pendingFiles.length} file(s)…`;
       cycleThink(pending);
+      const uploaded=pendingFiles.map(f=>f.name);
       const fd=new FormData(); pendingFiles.forEach(f=>fd.append('files',f));
       await api('/api/upload',fd);
       pendingFiles=[]; renderPending();
+      focusSources(uploaded);
       await refreshStatus();
       toast('Documents indexed');
     }
     pending.querySelector('.meta').textContent='retrieving & answering…';
-    const r=await api('/api/ask',{question:q,mode:$('#mode').value,...opts});
+    const sources=selectedDocList();
+    const r=await api('/api/ask',{question:q,mode:$('#mode').value,...opts,sources});
     LAST=r;
     clearInterval(cycleThink._t);
     pending.remove();
@@ -1233,7 +1308,9 @@ function renderDocs(){
       <td class="mono">${esc(ext)}</td>
       <td class="mono">${d.error?'—':d.chunks}</td>
       <td class="mono">${d.error?'—':d.pii_redacted}</td>
-      <td>${d.error?`<span class="status-dot err"></span><span class="pill q">${esc(d.error)}</span>`:'<span class="status-dot"></span><span class="pill g">indexed</span>'}</td>
+      <td>${d.error||d.warning||d.chunks===0
+        ?`<span class="status-dot err"></span><span class="pill q">${esc(d.error||d.warning||'no text')}</span>`
+        :'<span class="status-dot"></span><span class="pill g">indexed</span>'}</td>
     </tr>`;
   }).join('');
   $('#docTable').innerHTML=rows||`<tr><td colspan="5" class="empty">${entries.length?'No filenames match this filter.':'Corpus is empty — upload real documents to begin.'}</td></tr>`;
@@ -1277,9 +1354,9 @@ $('#runEval').onclick=async()=>{
   $('#evalState').innerHTML='<span class="spin"></span> benchmarking…';
   try{
     const b=await api('/api/eval',{n:30,k:5});
-    const win=b.selection.winner,R=b.results,g=b.guardrails;
+  const win=b.selection.winner,R=b.results,g=b.guardrails;
     const metric=(k,label)=>`<div class="card"><h3>${label}</h3><div class="bars">${R.map(r=>`<div class="bar"><span style="${r.name===win?'color:var(--good);font-weight:600':''}">${esc(r.name)}</span><div class="t"><i style="width:${(r[k]||0)*100}%"></i></div><span class="mono">${(r[k]||0).toFixed(2)}</span></div>`).join('')}</div></div>`;
-    $('#evalOut').innerHTML=`
+  $('#evalOut').innerHTML=`
       <div class="card" style="margin-bottom:14px;border-color:rgba(21,128,61,.3)"><h3>Production pick</h3><div class="pick">${esc(win)}</div>
       <div class="mono" style="font-size:11px;color:var(--mute);margin-top:6px">gates: faith ≥ ${b.selection.gates.min_faithfulness} · p95 ≤ ${b.selection.gates.max_p95_ms}ms · ${b.selection.passed_gates?'passed':'fallback'}</div></div>
       <div class="grid g2" style="margin-bottom:14px">${metric('mrr','MRR')}${metric('ndcg','nDCG@k')}${metric('recall','Recall@k')}${metric('faithfulness','Faithfulness')}</div>
@@ -1334,6 +1411,7 @@ async function refreshStatus(){
   $('#psPres').textContent=STATUS.presidio?'on':'regex';
   renderOverview();
   renderDocs();
+  renderDocScope();
 }
 
 refreshStatus().catch(e=>toast('Backend: '+e.message));

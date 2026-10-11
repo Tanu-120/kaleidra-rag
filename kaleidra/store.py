@@ -140,32 +140,64 @@ class HybridStore:
         order = np.argsort(-sims)[:n]
         return [(int(i), float(sims[i])) for i in order]
 
-    def search(self, queries: list[str], n: int = 20, rrf_k: int = 60, mode: str = "hybrid") -> list[Hit]:
-        """Multi-query hybrid retrieval. Rank lists from every (query x retriever) are fused with RRF."""
+    def search(
+        self,
+        queries: list[str],
+        n: int = 20,
+        rrf_k: int = 60,
+        mode: str = "hybrid",
+        sources: set[str] | None = None,
+    ) -> list[Hit]:
+        """Multi-query hybrid retrieval. Rank lists from every (query x retriever) are fused with RRF.
+
+        If `sources` is set, only chunks from those filenames are considered.
+        """
         hits: dict[int, Hit] = {}
         fused: Counter = Counter()
+        allowed = None
+        if sources:
+            allowed = {i for i, c in enumerate(self.chunks) if c.source in sources}
+            if not allowed:
+                return []
 
         def hit(i: int) -> Hit:
             return hits.setdefault(i, Hit(self.chunks[i]))
+
+        # Pull a wider pool when filtering so we still fill top-n after the source mask
+        pool = max(n * 3, n) if allowed is not None else n
 
         for qi, q in enumerate(queries):
             weight = 1.0 if qi == 0 else 0.6  # original query outweighs rewrites / HyDE
             if mode in ("hybrid", "bm25"):
                 s = self.bm25.scores(tokenize(q))
-                for rank, i in enumerate(np.argsort(-s)[:n]):
+                order = np.argsort(-s)
+                rank = 0
+                for i in order:
+                    i = int(i)
+                    if allowed is not None and i not in allowed:
+                        continue
                     if s[i] <= 0:
                         break
-                    h = hit(int(i))
+                    h = hit(i)
                     if h.bm25_rank is None or rank + 1 < h.bm25_rank:
                         h.bm25_rank, h.bm25_score = rank + 1, float(s[i])
-                    fused[int(i)] += weight / (rrf_k + rank + 1)
+                    fused[i] += weight / (rrf_k + rank + 1)
+                    rank += 1
+                    if rank >= pool:
+                        break
             if mode in ("hybrid", "dense"):
                 qv = self.embedder.encode([q], query=(qi == 0))[0]
-                for rank, (i, sc) in enumerate(self._dense(qv, n)):
+                rank = 0
+                for i, sc in self._dense(qv, min(pool * 2, max(len(self.chunks), 1))):
+                    if allowed is not None and i not in allowed:
+                        continue
                     h = hit(i)
                     if h.dense_rank is None or rank + 1 < h.dense_rank:
                         h.dense_rank, h.dense_score = rank + 1, sc
                     fused[i] += weight / (rrf_k + rank + 1)
+                    rank += 1
+                    if rank >= pool:
+                        break
         ranked = sorted(fused.items(), key=lambda kv: -kv[1])[:n]
         out = []
         for r, (i, sc) in enumerate(ranked, 1):

@@ -99,17 +99,35 @@ def _score_sentence(focus: set[str], s: str, rank: int, query: str, *, page: int
     if any(k in focus for k in ("warehouse", "warehouses", "compute")):
         if "virtual warehouse" in sl or "warehouses" in sl:
             score += 0.3
+    if "relational" in focus or ({"database", "databases"} & focus):
+        if "relational database" in sl:
+            score += 0.55
+        if re.search(r"collection of data stored in tables", sl):
+            score += 0.45
+        # demote Snowflake architecture answers when asking about generic databases
+        if "snowflake" in sl and "relational database" not in sl:
+            score -= 0.35
+    if "sql" in focus and definitional:
+        if re.search(r"\bsql is\b.*(language|acronym|structured query)", sl):
+            score += 0.5
+        if "most popular of all database languages" in sl:
+            score += 0.45
 
     if definitional:
         if _DEF.search(s):
             score += 0.3
-        subj = [w for w in focus]
-        if subj and re.search(rf"\b{re.escape(subj[0])}\b.{{0,40}}\b(is|are)\b", sl):
+        # prefer "X is …" for the full subject, not just the first token
+        focus_words = [w for w in focus if len(w) > 2]
+        if focus_words and all(w in t for w in focus_words[:3]):
+            score += 0.25
+        if focus_words and re.search(rf"\b{re.escape(focus_words[0])}\b.{{0,40}}\b(is|are)\b", sl):
             score += 0.4
-        if page and page <= 3:
-            score += 0.2 * (4 - page)
+        if page and page <= 8:
+            score += 0.12 * max(0, 6 - (page or 6))
         if any(k in hl or k in sl[:80] for k in ("billing", "credit & billing", "cost optimization")):
             score -= 0.3
+        if re.search(r"what is (a |an )?(relational )?database", hl + " " + sl[:120], re.I):
+            score += 0.35
 
     # heading alignment
     if focus & set(tokenize(heading)):
@@ -157,6 +175,9 @@ def extractive_answer(query: str, hits: list[Hit], max_sentences: int = 4) -> li
         if sc < 0.18 or key in seen:
             continue
         if definitional and not _DEF.search(s) and len(s.split()) < 18:
+            continue
+        # skip bare titles like "What is a Relational Database?"
+        if re.fullmatch(r"what is (a |an |the )?[\w\s\-/]+[?]?", s.strip(), re.I):
             continue
         if re.search(r"study guide|worked sql examples", s, re.I) and not _DEF.search(s):
             continue

@@ -1,6 +1,12 @@
 .venv/
 __pycache__/
+*.pyc
 .pytest_cache/
 .kaleidra_store/
 eval_report.json
-*.pyc
+*.pdf.ocr.json
+*.docling.md
+.DS_Store
+*.egg-info/
+dist/
+build/
