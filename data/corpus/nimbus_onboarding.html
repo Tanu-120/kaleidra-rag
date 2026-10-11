@@ -1,0 +1,12 @@
+<html><body>
+<nav>Home | Docs</nav>
+<h1>Getting Started with Nimbus</h1>
+<p>Install the Nimbus CLI and run nimbus login to authenticate with the Nimbus Identity Service. Create your first topic with nimbus topics create orders and choose a partition count based on expected throughput.</p>
+<h2>Producing Events</h2>
+<p>Use the official Python or Go client to publish events to the Nimbus Gateway. Enable idempotent producers to get exactly-once delivery. Every event must match a schema registered in the Schema Registry or it will land in the Dead Letter Queue.</p>
+<h2>Consumer Groups</h2>
+<p>Consumers that share a group name split the partitions of a topic between them. Adding a consumer triggers a rebalance coordinated by the Nimbus Controller. Keep consumer processing idempotent because at-least-once delivery may redeliver messages after a rebalance.</p>
+<h2>Troubleshooting</h2>
+<p>If consumer lag keeps growing, check broker disk usage and the Prometheus metrics on port 9102. Contact support at help@nimbuslabs.example with your cluster identifier. The Nimbus Gateway returns HTTP 429 when a client exceeds its rate limit.</p>
+<footer>copyright</footer>
+</body></html>

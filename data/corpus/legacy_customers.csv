@@ -1,0 +1,5 @@
+customer,plan,region,notes
+Acme Retail,Enterprise,Mumbai,Uses dedicated Broker Cluster with private networking
+Globex Logistics,Business,Frankfurt,Multi-region replication enabled between Frankfurt and Dublin
+Initech Bank,Enterprise,Bengaluru,Requires mutual TLS and audit log export to customer bucket
+Umbrella Health,Starter,Singapore,Evaluating Business plan for the ninety-nine point nine percent SLA
