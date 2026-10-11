@@ -138,7 +138,30 @@ class Kaleidra:
             stage("dedupe", t, dropped=len(dropped))
         hits = hits[:top_k]
 
-        # 6b. definitional questions: pull early-page / overview chunks the main ranker may miss
+        # 6b. topic boost: pull chunks that literally discuss the asked concept
+        topic = None
+        ql = q.lower()
+        if re.search(r"\bmaterialized views?\b|\bviews?\b", ql):
+            topic = ["materialized views", "regular views", "view in Snowflake", "CREATE VIEW"]
+        elif re.search(r"\bvirtual warehouses?\b|\bwarehouses?\b", ql):
+            topic = ["virtual warehouse", "warehouse compute", "auto-suspend"]
+        if topic:
+            t = time.time()
+            have = {h.chunk.id for h in hits}
+            added = 0
+            for h in self.store.search(topic + [q], n=12, mode="hybrid"):
+                if h.chunk.id in have:
+                    continue
+                if not re.search(r"\bviews?\b|\bwarehouse", h.chunk.text, re.I):
+                    continue
+                hits.append(h)
+                have.add(h.chunk.id)
+                added += 1
+                if added >= 5:
+                    break
+            stage("topic_boost", t, added=added)
+
+        # 6c. definitional questions: pull early-page / overview chunks the main ranker may miss
         if re.match(r"^\s*what\s+(is|are)\b", q, re.I):
             subj = re.sub(r"^\s*what\s+(is|are)\s+", "", q, flags=re.I).strip(" ?.")
             if subj:

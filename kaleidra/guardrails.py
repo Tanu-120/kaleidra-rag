@@ -41,6 +41,17 @@ PII_PATTERNS: list[tuple[str, re.Pattern, float]] = [
 _presidio = None
 _presidio_tried = False
 
+# Presidio often tags SQL/stats tokens like "max" (Max) as PERSON names.
+_TECH_FALSE_POS = {
+    "max", "min", "avg", "sum", "count", "null", "true", "false", "select", "from", "where",
+    "join", "table", "view", "views", "index", "key", "row", "rows", "column", "columns",
+    "partition", "warehouse", "cluster", "snowflake", "aws", "azure", "gcp", "s3", "sql",
+    "json", "xml", "csv", "api", "http", "https", "uuid", "id", "ids", "name", "type",
+    "mode", "user", "admin", "root", "test", "demo", "sample", "data", "time", "date",
+    "day", "week", "month", "year", "hour", "credit", "credits", "cost", "size", "large",
+    "small", "medium", "temp", "permanent", "transient", "secure", "share", "task", "pipe",
+}
+
 
 def _get_presidio():
     global _presidio, _presidio_tried
@@ -56,6 +67,29 @@ def _get_presidio():
     return _presidio
 
 
+def _is_false_positive(f: Finding, text: str) -> bool:
+    """Drop NER false positives that destroy technical documentation."""
+    tok = f.text.strip()
+    low = tok.lower()
+    if low in _TECH_FALSE_POS:
+        return True
+    if f.kind in {"PERSON", "LOCATION", "NRP"}:
+        # min/max/distinct-count — slash-delimited tech tokens
+        left = text[f.start - 1] if f.start > 0 else ""
+        right = text[f.end] if f.end < len(text) else ""
+        if left in "/\\._-" or right in "/\\._-":
+            return True
+        window = text[max(0, f.start - 16): min(len(text), f.end + 16)].lower()
+        if any(k in window for k in ("min/", "/max", "distinct", "null-count", "avg(", "sum(", "count(")):
+            return True
+        # require PERSON-like shape: at least 2 chars and not all-caps acronyms
+        if f.kind == "PERSON" and (len(tok) <= 3 or tok.isupper()):
+            return True
+        if f.score < 0.75 and f.source == "presidio-ner":
+            return True
+    return False
+
+
 def detect_pii(text: str, use_presidio: bool = True) -> list[Finding]:
     found: list[Finding] = []
     for kind, pat, score in PII_PATTERNS:
@@ -68,10 +102,16 @@ def detect_pii(text: str, use_presidio: bool = True) -> list[Finding]:
     eng = _get_presidio() if use_presidio else None
     if eng:
         try:
-            for r in eng.analyze(text=text, language="en", entities=["PERSON", "LOCATION", "NRP", "IBAN_CODE"], score_threshold=0.6):
+            for r in eng.analyze(
+                text=text,
+                language="en",
+                entities=["PERSON", "LOCATION", "NRP", "IBAN_CODE"],
+                score_threshold=0.75,
+            ):
                 found.append(Finding(r.entity_type, r.start, r.end, text[r.start:r.end], float(r.score), "presidio-ner"))
         except Exception:
             pass
+    found = [f for f in found if not _is_false_positive(f, text)]
     # resolve overlaps: keep highest score / longest
     found.sort(key=lambda f: (f.start, -(f.end - f.start)))
     out: list[Finding] = []

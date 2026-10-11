@@ -77,7 +77,18 @@ All JSON. Errors use FastAPI's `{"detail": ...}` (422 for validation).
 ```
 
 ### `POST /api/guard`  `{ "text": "..." }` → the `guard` object above (used for live typing feedback).
+### `POST /api/compare`
+```jsonc
+// request
+{ "question": "...",
+  "a": {"label":"Full pipeline","mode":"hybrid","use_rerank":true,"use_hyde":true,"use_graph":true,"use_dedupe":true,"top_k":5},
+  "b": {"label":"BM25 only","mode":"bm25","use_rerank":false,"use_hyde":false,"use_graph":false,"use_dedupe":true,"top_k":5} }
+// response
+{ "question", "a": {"label","config","result": /* ask response */}, "b": { ... },
+  "delta": {"faithfulness": 0.12, "latency_ms": 8.1, "confidence": 0.09} }
+```
 ### `POST /api/upload`  multipart `files[]` → ingest summary. `POST /api/ingest` re-indexes the corpus directory.
+### `GET /api/eval/export` → download `kaleidra_eval_report.json` (last persisted benchmark).
 ### `GET /api/status` → `{version, ingest:{documents,chunks,pii_redacted,vector_store,embedder,reranker,graph}, docs, presidio}`
 ### `GET /api/graph` → `{nodes:[{id,mentions}], edges:[{source,target,weight}]}`
 ### `POST /api/eval`  `{ "n": 25, "k": 5 }`
