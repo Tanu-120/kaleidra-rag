@@ -48,17 +48,19 @@ def test_injection_blocked_but_benign_allowed():
 
 
 def test_pii_never_enters_index(kaleidra):
-    assert all("4111 1111" not in c.text and "@nimbuslabs" not in c.text for c in kaleidra.chunks)
+    assert all("4111 1111" not in c.text and "@kaleidra.local" not in c.text for c in kaleidra.chunks)
 
 
 def test_hybrid_retrieval_finds_retry_doc(kaleidra):
-    r = kaleidra.ask("How does the retry mechanism work?")
-    assert not r["blocked"] and r["hits"][0]["source"] == "nimbus_platform_guide.md"
+    r = kaleidra.ask("How does Kaleidra retry failed retrieval or model calls with exponential backoff?")
+    assert not r["blocked"]
+    sources = [h["source"] for h in r["hits"]]
+    assert "02_hybrid_retrieval.md" in sources
     assert r["answer"]["faithfulness"]["score"] > 0.6
 
 
 def test_indirect_injection_quarantined(kaleidra):
-    r = kaleidra.ask("What does the security runbook say about incident response and audit logs?", top_k=8)
+    r = kaleidra.ask("What should happen when the red-team poisoned fixture is retrieved?", top_k=8)
     text = " ".join(h["text"] for h in r["hits"]).lower()
     assert "ignore all previous instructions" not in text
 
@@ -93,7 +95,7 @@ def test_benchmark_and_selection(kaleidra):
 def test_api_contract():
     with TestClient(app) as c:
         assert c.get("/api/health").json() == {"ok": True}
-        r = c.post("/api/ask", json={"question": "What is the SLA for Business plans?"}).json()
+        r = c.post("/api/ask", json={"question": "What gates does production selection use?"}).json()
         assert {"hits", "answer", "trace", "candidates", "graph_view", "variants"} <= set(r)
         assert c.post("/api/ask", json={"question": "x"}).status_code == 422
         g = c.post("/api/guard", json={"text": "email me at jo@x.org"}).json()

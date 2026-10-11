@@ -69,19 +69,29 @@ class HybridStore:
         self.matrix = np.zeros((0, embedder.dim), dtype=np.float32)
         self.bm25 = BM25()
         self._chroma = None
+        self._chroma_client = None
+        self._chroma_name = "kaleidra_" + re.sub(r"\W", "_", embedder.name)[:40]
         if use_chroma:
             try:
                 import chromadb
 
-                client = chromadb.PersistentClient(path=str(persist_dir / "chroma"))
-                name = "kaleidra_" + re.sub(r"\W", "_", embedder.name)[:40]
-                try:
-                    client.delete_collection(name)
-                except Exception:
-                    pass
-                self._chroma = client.create_collection(name, metadata={"hnsw:space": "cosine"})
+                self._chroma_client = chromadb.PersistentClient(path=str(persist_dir / "chroma"))
+                self._reset_chroma()
             except Exception as e:
                 print(f"[kaleidra] ChromaDB unavailable ({type(e).__name__}); using in-memory numpy index")
+                self._chroma_client = None
+
+    def _reset_chroma(self):
+        """Drop and recreate the collection so re-ingest never hits a stale handle."""
+        if self._chroma_client is None:
+            return
+        try:
+            self._chroma_client.delete_collection(self._chroma_name)
+        except Exception:
+            pass
+        self._chroma = self._chroma_client.create_collection(
+            self._chroma_name, metadata={"hnsw:space": "cosine"}
+        )
 
     @property
     def backend(self) -> str:
@@ -93,7 +103,8 @@ class HybridStore:
             return
         self.matrix = self.embedder.encode([c.contextual for c in chunks])
         self.bm25.fit([tokenize(c.contextual) for c in chunks])
-        if self._chroma is not None:
+        if self._chroma_client is not None:
+            self._reset_chroma()
             B = 256
             for i in range(0, len(chunks), B):
                 part = chunks[i:i + B]
@@ -106,10 +117,25 @@ class HybridStore:
         (self.persist_dir / "chunks.json").write_text(json.dumps([c.__dict__ for c in chunks]))
 
     def _dense(self, qvec: np.ndarray, n: int) -> list[tuple[int, float]]:
-        if self._chroma is not None:
-            res = self._chroma.query(query_embeddings=[qvec.tolist()], n_results=min(n, len(self.chunks)))
-            idx = {c.id: i for i, c in enumerate(self.chunks)}
-            return [(idx[i], 1 - d) for i, d in zip(res["ids"][0], res["distances"][0])]
+        if self._chroma is not None and len(self.chunks):
+            try:
+                res = self._chroma.query(
+                    query_embeddings=[qvec.tolist()],
+                    n_results=min(n, len(self.chunks)),
+                )
+                idx = {c.id: i for i, c in enumerate(self.chunks)}
+                out = []
+                for i, d in zip(res["ids"][0], res["distances"][0]):
+                    if i in idx:
+                        out.append((idx[i], 1 - d))
+                if out:
+                    return out
+            except Exception as e:
+                # Stale / wiped Chroma handle — fall back to in-memory vectors
+                print(f"[kaleidra] Chroma query failed ({type(e).__name__}); using numpy dense index")
+                self._chroma = None
+        if self.matrix.size == 0:
+            return []
         sims = self.matrix @ qvec
         order = np.argsort(-sims)[:n]
         return [(int(i), float(sims[i])) for i in order]

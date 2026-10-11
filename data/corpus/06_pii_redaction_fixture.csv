@@ -1,0 +1,4 @@
+record_id,role,contact_email,phone,notes
+1,operator,ops.lead@kaleidra.local,+91 98765 43210,Primary on-call contact for local demos
+2,billing,billing@kaleidra.local,4111 1111 1111 1111,Test Visa number for Luhn-validated card redaction
+3,security,sec.review@kaleidra.local,PAN ABCDE1234F,Synthetic PAN pattern used only to verify ingest redaction

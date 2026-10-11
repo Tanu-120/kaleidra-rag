@@ -65,7 +65,7 @@ kaleidra/
   pipeline.py    orchestrator that emits a per-stage trace
   api.py         FastAPI service
 static/index.html  single-file UI (no build step)
-data/corpus/       sample docs incl. PII and a poisoned page
+data/corpus/       real Kaleidra docs + labelled red-team/PII fixtures
 docs/ARCHITECTURE.md  architecture, API contracts, design decisions
 ```
 

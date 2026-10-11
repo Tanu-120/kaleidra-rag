@@ -54,12 +54,19 @@ def status():
 
 @app.post("/api/ask")
 def ask(req: AskRequest):
-    p = get_kaleidra()
-    res = p.ask(req.question, mode=req.mode, use_rerank=req.use_rerank, use_hyde=req.use_hyde,
-                use_graph=req.use_graph, use_dedupe=req.use_dedupe, top_k=req.top_k)
-    focus = res.get("graph", {}).get("entities") or None
-    res["graph_view"] = p.graph.to_json(focus)
-    return res
+    try:
+        p = get_kaleidra()
+        if not p.chunks:
+            raise HTTPException(503, "Corpus is empty or still indexing — open Documents and re-ingest, then retry.")
+        res = p.ask(req.question, mode=req.mode, use_rerank=req.use_rerank, use_hyde=req.use_hyde,
+                    use_graph=req.use_graph, use_dedupe=req.use_dedupe, top_k=req.top_k)
+        focus = res.get("graph", {}).get("entities") or None
+        res["graph_view"] = p.graph.to_json(focus)
+        return res
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Ask failed: {type(e).__name__}: {e}") from e
 
 
 @app.post("/api/guard")
@@ -118,4 +125,7 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    return FileResponse(
+        STATIC / "index.html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"},
+    )
